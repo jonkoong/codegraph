@@ -204,9 +204,12 @@ interface GitChanges {
  */
 function getGitChangedFiles(rootDir: string, config: CodeGraphConfig): GitChanges | null {
   try {
+    // -uall (== --untracked-files=all) forces git to enumerate every untracked
+    // file individually. Without it, git collapses an untracked directory into
+    // a single "?? path/" entry, hiding every file inside from the indexer.
     const output = execFileSync(
       'git',
-      ['status', '--porcelain', '--no-renames'],
+      ['status', '--porcelain', '--no-renames', '-uall'],
       { cwd: rootDir, encoding: 'utf-8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] }
     );
 
@@ -1263,6 +1266,24 @@ export class ExtractionOrchestrator {
         filesToIndex.push(filePath);
         changedFilePaths.push(filePath);
         filesAdded++;
+      }
+
+      // Reconcile orphans: files indexed previously but no longer present.
+      // `git status` doesn't report untracked-file deletions (a deleted
+      // untracked file simply disappears from the `??` list, with no
+      // accompanying status code), so they'd otherwise linger in the DB
+      // forever. We scope the existsSync sweep to files NOT in git's visible
+      // set — for most syncs that's a tiny minority, keeping this cheap.
+      const visibleFiles = getGitVisibleFiles(this.rootDir);
+      if (visibleFiles) {
+        for (const tracked of this.queries.getAllFiles()) {
+          if (visibleFiles.has(tracked.path)) continue;
+          const fullPath = path.join(this.rootDir, tracked.path);
+          if (!fs.existsSync(fullPath)) {
+            this.queries.deleteFile(tracked.path);
+            filesRemoved++;
+          }
+        }
       }
     } else {
       // === Fallback: full scan (non-git project or git failure) ===
