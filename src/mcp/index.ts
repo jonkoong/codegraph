@@ -163,6 +163,7 @@ export class MCPServer {
     if (!this.cg) return;
 
     const started = this.cg.watch({
+      debounceMs: 500,
       onSyncComplete: (result) => {
         if (result.filesChanged > 0) {
           process.stderr.write(
